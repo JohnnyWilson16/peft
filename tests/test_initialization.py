@@ -5057,6 +5057,54 @@ def test_prepare_model_for_compiled_hotswap_preserves_conv2d_attributes():
     assert torch.allclose(output_before, output_after, atol=1e-6, rtol=1e-5)
 
 
+def test_hotswap_dora_adapter(tmp_path):
+    # Regression test for https://github.com/huggingface/peft/issues/3867: hotswapping adapters with use_dora=True.
+    class MLP(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.lin0 = nn.Linear(10, 20, bias=True)
+            self.relu = nn.ReLU()
+            self.lin1 = nn.Linear(20, 5, bias=False)
+
+        def forward(self, X):
+            X = X.float()
+            X = self.lin0(X)
+            X = self.relu(X)
+            X = self.lin1(X)
+            return X
+
+    device = infer_device()
+    torch.manual_seed(0)
+    base_model = MLP().to(device)
+    config = LoraConfig(target_modules=["lin0"], r=2, lora_alpha=4, use_dora=True, init_lora_weights=False)
+
+    torch.manual_seed(1)
+    model = get_peft_model(deepcopy(base_model), config).eval()
+    model.add_adapter("other", config)
+
+    torch.manual_seed(2)
+    incoming_model = get_peft_model(deepcopy(base_model), config).eval()
+    incoming_model.save_pretrained(tmp_path / "incoming")
+    inputs = torch.rand(3, 10, device=device)
+
+    with torch.inference_mode():
+        incoming_output = incoming_model(inputs)
+        old_output = model(inputs)
+
+    assert not torch.allclose(old_output, incoming_output)
+
+    # Hotswap into default adapter
+    hotswap_adapter(model, tmp_path / "incoming", adapter_name="default")
+    with torch.inference_mode():
+        torch.testing.assert_close(model(inputs), incoming_output)
+
+    # Hotswap into non-default adapter
+    hotswap_adapter(model, tmp_path / "incoming", adapter_name="other")
+    with torch.inference_mode():
+        model.set_adapter("other")
+        torch.testing.assert_close(model(inputs), incoming_output)
+
+
 @pytest.mark.skipif(
     platform.system() != "Linux", reason="Out of the box, torch.compile does not work on Windows or MacOS"
 )

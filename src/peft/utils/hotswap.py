@@ -477,9 +477,16 @@ def hotswap_adapter_from_state_dict(
     adapter_prefixes = _get_tuner_state_dict_key_prefixes(model, adapter_name=adapter_name)
     adapter_state_dict = _filter_state_dict_by_key_prefixes(model.state_dict(), adapter_prefixes)
     missing_keys = {key for key in adapter_state_dict if parameter_prefix in key}
-    unexpected_keys = []
-
     # first: dry run, not swapping anything
+    # Re-normalize DoRA magnitude vector keys if they were mapped without ".weight"
+    normalized_state_dict = {}
+    for key, val in state_dict.items():
+        if key.endswith(f"lora_magnitude_vector.{adapter_name}"):
+            normalized_state_dict[f"{key}.weight"] = val
+        else:
+            normalized_state_dict[key] = val
+    state_dict = normalized_state_dict
+    unexpected_keys = []
     for key, new_val in state_dict.items():
         try:
             old_val = attrgetter(key)(model)

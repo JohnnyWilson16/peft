@@ -412,7 +412,11 @@ def _insert_adapter_name_into_state_dict(
     """Utility function to remap the state_dict keys to fit the PEFT model by inserting the adapter name."""
     peft_model_state_dict = {}
     for key, val in state_dict.items():
-        if parameter_prefix in key:
+        if key.endswith("lora_magnitude_vector"):
+            # DoRA stores the magnitude vector under a DoraLayer module, whose parameter is named "weight"
+            key = f"{key}.{adapter_name}.weight"
+            peft_model_state_dict[key] = val
+        elif parameter_prefix in key:
             _, _, suffix = key.rpartition(parameter_prefix)
             if "." in suffix:
                 suffix_to_replace = ".".join(suffix.split(".")[1:])
